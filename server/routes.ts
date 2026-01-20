@@ -13,6 +13,10 @@ const createConversationSchema = z.object({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  app.get("/healthz", (_req, res) => {
+    res.status(200).json({ ok: true });
+  });
+
   // Create Tavus conversation
   app.post("/api/conversations", async (req, res) => {
     try {
@@ -24,6 +28,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const trafficSource = validSources.includes(normalizedSource) ? normalizedSource : 'direct';
       
       console.log(`📊 New conversation - Session: ${sessionId.slice(0, 8)}, Source: ${trafficSource}`);
+      console.log(`tavus.create start session=${sessionId.slice(0, 8)} source=${trafficSource}`);
 
       const API_KEY = String(process.env.TAVUS_API_KEY || '').trim();
       const REPLICA_ID = String(process.env.TAVUS_REPLICA_ID || '').trim();
@@ -170,7 +175,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!tavusResponse.ok) {
         const errorText = await tavusResponse.text();
-        console.error("Tavus API error:", tavusResponse.status, errorText);
+        const errorMessage = errorText.length > 300 ? `${errorText.slice(0, 300)}...` : errorText;
+        console.error(`tavus.create failed status=${tavusResponse.status} message=${errorMessage}`);
         
         let errorDetails;
         try {
@@ -199,6 +205,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      console.log(`tavus.create ok status=${tavusResponse.status} id=${conversationId}`);
+
       // Store session with conversation data using the provided sessionId
       const session = await storage.createSession(sessionId, {
         conversationId,
@@ -212,7 +220,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         conversationId,
       });
     } catch (error) {
-      console.error("Error creating conversation:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`tavus.create exception message=${errorMessage}`);
       
       // Handle Zod validation errors as 400 Bad Request
       if (error instanceof ZodError) {
