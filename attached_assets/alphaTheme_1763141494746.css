@@ -1,0 +1,262 @@
+/* --- AlphaSource theme (Wix-matched) ------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700&display=swap');
+
+/* alphaTheme.css (appenditions/overrides) */
+
+/* Full-bleed opaque hallway hero (historical/working translateX method) */
+.alpha-hero.fullbleed{
+  position: relative;
+  width: 100vw;
+  max-width: 100vw;                  /* ensure no wrapper max-width clips it */
+  margin-left: 50%;
+  transform: translateX(-50%);
+  margin-top: 0;
+  margin-right: 0;
+  margin-bottom: 0;
+  border-radius: 0;
+  background: url("/hallway.png") center/cover no-repeat; /* opaque */
+  padding: 165px 0;                  /* ~10% taller */
+  display: flex;                     /* center Tavus stage inside the hero */
+  align-items: center;               /* vertical centering */
+  justify-content: center;           /* horizontal centering */
+  box-sizing: border-box;
+}
+/* Constrain Tavus stage within the hero */
+.alpha-hero.fullbleed .tavus-stage{
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ---------- Form grids ---------- */
+
+/* Existing 2-col grid (1fr | 1.5fr) used INSIDE Step-1 form */
+.alpha-form-grid{
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: var(--alpha-gap);
+}
+@media (max-width: 640px){
+  .alpha-form-grid{ grid-template-columns: 1fr; }
+}
+
+/* New outer 3-col grid for desktop alignment (equal columns) */
+.alpha-form-grid-3{
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;                        /* fixed ~20px gutter so cols never touch */
+  max-width: 1200px;                /* centered cap */
+  margin: 0 auto;
+  align-items: start;               /* align Step 2 to the top */
+}
+@media (max-width: 1023px){
+  .alpha-form-grid-3{ grid-template-columns: 1fr; }
+}
+
+/* Utilities for placement inside the 3-col grid */
+.alpha-span-2{ grid-column: 1 / span 2; }
+@media (max-width:1023px){ .alpha-span-2{ grid-column: 1 / -1; } }
+
+/* Step 2 column base styling (sits in col 3 on desktop) */
+.alpha-step2{ grid-column: 3; }
+@media (max-width:1023px){ .alpha-step2{ grid-column: 1; } }
+
+/* ---------- Form controls ---------- */
+
+.alpha-label{
+  display:block;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+.alpha-input{
+  height: 52px;
+  border-radius: var(--alpha-radius);
+  background: var(--alpha-surface);
+  border: 1px solid var(--alpha-border);
+  color: var(--alpha-text);
+  padding: 10px 12px;
+  width: 100%;
+  font-size: 1.05rem; /* slightly larger input text */
+}
+
+/* Buttons */
+.btn-lg{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height: 56px;
+  padding: 0 22px;
+  border-radius: 28px;
+  font-weight: 700;
+  background: var(--alpha-primary);
+  color: #fff;
+  border: 1px solid var(--alpha-primary);
+  transition: filter .15s ease, background .15s ease, border-color .15s ease;
+  font-size: 1.05rem; /* larger text for Resume / Submit / Verify */
+}
+.btn-lg:hover{ background: var(--alpha-primary-strong); border-color: var(--alpha-primary-strong); }
+
+.btn-xl{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height: 64px;
+  padding: 0 28px;
+  border-radius: 9999px;            /* pill */
+  font-weight: 800;
+  font-size: 1.125rem;              /* larger Start Interview */
+}
+.btn-wide{ min-width: 360px; }      /* ~1.5× wider */
+
+/* White with lilac outline/text (Start Interview) */
+.btn-outline-lilac{
+  background: #fff;
+  color: var(--alpha-primary);
+  border: 2px solid var(--alpha-primary);
+}
+.btn-outline-lilac:hover{
+  color: #fff;
+  background: var(--alpha-primary);
+  border-color: var(--alpha-primary);
+}
+
+/* Form container spacing */
+.alpha-form{ padding: 0 24px 48px; }
+
+/* Inline “Verified” text next to the Verify button */
+.verified-inline{
+  font-size: 0.95rem;
+  opacity: 0.9;
+  color: #4ade80; /* consistent with earlier inline style */
+}
+
+/* (pre-existing theme rules stay as-is below this line) */
+
+.alpha-theme{
+  --alpha-bg:#061551;
+  --alpha-surface:rgba(255,255,255,0.06);
+  --alpha-border:rgba(255,255,255,0.14);
+  --alpha-text:#EBFEFF;
+  --alpha-muted:rgba(235,254,255,0.75);
+  --alpha-primary:#AD8BF7;
+  --alpha-primary-strong:#854DFF;
+  --alpha-darktext:#2F2E2E;
+  --alpha-radius:12px;
+  --alpha-gap:14px;
+}
+
+.alpha-theme, .alpha-theme body{
+  background:var(--alpha-bg);
+  color:var(--alpha-text);
+  font-family:'Raleway',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+  min-height:100vh;
+}
+
+/* links */
+.alpha-theme a{ color:var(--alpha-primary); text-decoration:none; }
+.alpha-theme a:hover{ text-decoration:underline; }
+
+/* generic surface helpers */
+.alpha-theme .card, .alpha-theme .panel, .alpha-theme .box, .alpha-theme .section,
+.alpha-theme .container, .alpha-theme .expanded, .alpha-theme .expand, .alpha-theme .expander-content,
+.alpha-theme .details, .alpha-theme .details-content, .alpha-theme .row-details, .alpha-theme details[open],
+.alpha-theme .report, .alpha-theme [class*="Card"], .alpha-theme [class*="Panel"]{
+  background:var(--alpha-surface)!important;
+  border:1px solid var(--alpha-border)!important;
+  border-radius:var(--alpha-radius);
+  color:var(--alpha-text);
+}
+
+/* headings inside panels use darker text */
+.alpha-theme .panel h1, .alpha-theme .panel h2, .alpha-theme .panel h3, .alpha-theme .panel h4,
+.alpha-theme .report h1, .alpha-theme .report h2, .alpha-theme .report h3, .alpha-theme .report h4,
+.alpha-theme .expanded h1, .alpha-theme .expanded h2, .alpha-theme .expanded h3, .alpha-theme .expanded h4{
+  color:var(--alpha-darktext)!important;
+}
+
+/* buttons (base) */
+.alpha-theme button, .alpha-theme .btn, .alpha-theme input[type="button"], .alpha-theme input[type="submit"]{
+  appearance:none; background:var(--alpha-primary); color:#fff; border:1px solid var(--alpha-primary);
+  border-radius:20px; padding:8px 14px; font-weight:600; cursor:pointer;
+}
+.alpha-theme button:hover, .alpha-theme .btn:hover, .alpha-theme input[type="button"]:hover, .alpha-theme input[type="submit"]:hover{
+  background:var(--alpha-primary-strong); border-color:var(--alpha-primary-strong);
+}
+
+/* inputs (base) */
+.alpha-theme input, .alpha-theme select, .alpha-theme textarea{
+  background:rgba(255,255,255,0.08); color:var(--alpha-text); border:1px solid var(--alpha-border);
+  border-radius:10px; padding:8px 10px;
+}
+.alpha-theme input::placeholder, .alpha-theme textarea::placeholder{ color:var(--alpha-muted); }
+
+.alpha-theme select option{ color:#111; }
+
+/* ===== Removed legacy .alpha-hero (translucent overlay) per your direction ===== */
+
+/* ===== Form container (outer) ============================================ */
+.alpha-form{ max-width:1200px; margin:0 auto; padding:0 24px 48px; }
+
+/* two-column grid used inside Step-1 (kept) */
+.alpha-form-grid{
+  display:grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: var(--alpha-gap);
+}
+@media (max-width: 768px){
+  .alpha-form-grid{ grid-template-columns: 1fr; }
+}
+.alpha-col-span-2{ grid-column: 1 / -1; }
+
+/* hide any native file inputs; we trigger via a styled button */
+.alpha-form input[type="file"]{ display:none !important; }
+
+/* place the submit button bottom-right of the grid */
+.alpha-form .actions-right{ display:flex; justify-content:flex-end; align-items:center; }
+
+/* small filename text under the resume button */
+.alpha-form .file-note{ margin-top:4px; font-size:12px; opacity:.8; }
+
+/* Centered block for Start Interview + bottom padding */
+.start-block {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 24px;
+}
+
+/* Scoped input sizing for Interview page (prevents overlap) */
+.alpha-form-grid-3 .alpha-input {
+  width: 250px !important;
+  height: 70px !important;
+}
+
+/* --- Embedded-in-Wix adjustments ----------------------------------------- */
+html.embedded,
+body.embedded {
+  overflow: hidden !important;  /* prevent inner scrollbars when embedded */
+  height: auto !important;
+}
+#root {
+  overflow: visible !important; /* allow content to define height in iframe */
+}
+
+/* Embedded: prevent nested scroll areas (dashboards, tables, reports) */
+html.embedded body,
+html.embedded main,
+html.embedded .alpha-theme,
+html.embedded .alpha-page,
+html.embedded .alpha-container,
+html.embedded .page-content,
+html.embedded .panel,
+html.embedded .card,
+html.embedded .table-wrap,
+html.embedded .table-container,
+html.embedded .data-grid,
+html.embedded .alpha-table,
+html.embedded .report {
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+/* Stop nested scroll chaining/bounce inside the iframe */
+html.embedded * { overscroll-behavior: contain; }
