@@ -10,12 +10,28 @@ declare module 'http' {
     rawBody: unknown
   }
 }
+
+declare module "express-serve-static-core" {
+  interface Request {
+    requestId?: string;
+  }
+}
 app.use(express.json({
   verify: (req, _res, buf) => {
     req.rawBody = buf;
   }
 }));
 app.use(express.urlencoded({ extended: false }));
+
+app.use((req, res, next) => {
+  const headerRequestId = req.headers["x-request-id"];
+  const requestId = typeof headerRequestId === "string" && headerRequestId.length > 0
+    ? headerRequestId
+    : crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader("x-request-id", requestId);
+  next();
+});
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -31,7 +47,8 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      const requestId = req.requestId ? ` requestId=${req.requestId}` : "";
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms${requestId}`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }

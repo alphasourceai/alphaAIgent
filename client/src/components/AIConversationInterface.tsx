@@ -12,6 +12,7 @@ interface AIConversationInterfaceProps {
   conversationDuration?: number;
   personaId?: string;
   replicaId?: string;
+  appSlug?: string;
   source?: string;
 }
 
@@ -21,6 +22,7 @@ export default function AIConversationInterface({
   conversationDuration = 150,
   personaId,
   replicaId,
+  appSlug,
   source
 }: AIConversationInterfaceProps) {
   const [conversationUrl, setConversationUrl] = useState<string | null>(null);
@@ -41,6 +43,7 @@ export default function AIConversationInterface({
         sessionId,
         personaId,
         replicaId,
+        appSlug,
         source,
       });
 

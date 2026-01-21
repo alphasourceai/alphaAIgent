@@ -5,6 +5,9 @@ import { z } from "zod";
 
 export const sessions = pgTable("sessions", {
   id: varchar("id").primaryKey(),
+  appId: text("app_id"),
+  leadId: text("lead_id"),
+  source: text("source"),
   conversationId: text("conversation_id"),
   conversationUrl: text("conversation_url"),
   status: text("status"),
