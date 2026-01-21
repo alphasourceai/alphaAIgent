@@ -14,6 +14,11 @@ export default function Landing() {
   const [showQR, setShowQR] = useState(false);
   const [source, setSource] = useState<string | null>(null);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
+  const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+
+  if (!publicBaseUrl) {
+    throw new Error('PUBLIC_BASE_URL is not set');
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -29,7 +34,7 @@ export default function Landing() {
     }
 
     // Generate QR code for this page with ?source=qr parameter
-    const qrUrl = `${window.location.origin}?source=qr`;
+    const qrUrl = `${publicBaseUrl}?source=qr`;
     QRCode.toDataURL(qrUrl, {
       width: 256,
       margin: 2,
@@ -54,7 +59,7 @@ export default function Landing() {
 
   const handleCopyLink = () => {
     const sessionId = crypto.randomUUID();
-    const link = `${window.location.origin}/conversation/${sessionId}?source=link`;
+    const link = `${publicBaseUrl}/conversation/${sessionId}?source=link`;
     navigator.clipboard.writeText(link);
     toast({
       title: 'Link copied!',
