@@ -1,7 +1,215 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { type Session } from "@shared/schema";
 import { z, ZodError } from "zod";
+import { buildStoragePublicUrl, supabaseRest } from "./supabase";
+import { createRateLimiter } from "./rateLimit";
+import { createHash, createHmac } from "crypto";
+
+const appConfigLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+const leadLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+const optionalTrimmedString = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  },
+  z.string().optional(),
+);
+
+const appSlugSchema = z.object({
+  slug: z.string().trim().min(1).max(64),
+});
+
+const leadCaptureSchema = z.object({
+  appSlug: z.string().trim().min(1).max(64),
+  name: optionalTrimmedString,
+  email: z.preprocess(
+    (value) => (typeof value === "string" ? value.trim() : undefined),
+    z.string().email().optional(),
+  ),
+  phone: optionalTrimmedString,
+  source: optionalTrimmedString,
+});
+
+function normalizeSource(source?: string) {
+  const validSources = ["nfc", "qr", "link", "direct"];
+  const normalized = source ? source.trim().toLowerCase() : "direct";
+  return validSources.includes(normalized) ? normalized : "direct";
+}
+
+const parsedSessionTtlMs = Number.parseInt(
+  String(process.env.TAVUS_SESSION_TTL_MS || "3600000"),
+  10,
+);
+const SESSION_TTL_MS = Number.isFinite(parsedSessionTtlMs)
+  ? parsedSessionTtlMs
+  : 3600000;
+const ACTIVE_SESSION_STATUSES = new Set(["created", "active"]);
+
+function normalizeSessionStatus(status?: string | null): string | null {
+  if (!status) {
+    return null;
+  }
+  const normalized = status.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getSessionCreatedAtMs(session: Session): number | null {
+  if (!session.createdAt) {
+    return null;
+  }
+  if (session.createdAt instanceof Date) {
+    return session.createdAt.getTime();
+  }
+  const parsed = Date.parse(String(session.createdAt));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function isSessionExpired(session: Session): boolean {
+  const createdAtMs = getSessionCreatedAtMs(session);
+  if (!createdAtMs) {
+    return false;
+  }
+  return Date.now() - createdAtMs > SESSION_TTL_MS;
+}
+
+function extractErrorMessage(details: unknown): string {
+  if (!details) {
+    return "";
+  }
+  if (typeof details === "string") {
+    return details;
+  }
+  if (typeof details === "object") {
+    const record = details as Record<string, unknown>;
+    const directMessage = record.message ?? record.error ?? record.detail;
+    if (typeof directMessage === "string") {
+      return directMessage;
+    }
+    const nestedDetails = record.details;
+    if (nestedDetails && typeof nestedDetails === "object") {
+      const nestedMessage = (nestedDetails as Record<string, unknown>).message;
+      if (typeof nestedMessage === "string") {
+        return nestedMessage;
+      }
+    }
+  }
+  return "";
+}
+
+function isMaxConcurrentError(details: unknown): boolean {
+  const message = extractErrorMessage(details).toLowerCase();
+  return message.includes("maximum concurrent conversations");
+}
+
+const parsedWebhookTtlMs = Number.parseInt(
+  String(process.env.TAVUS_WEBHOOK_DEDUPE_TTL_MS || "600000"),
+  10,
+);
+const WEBHOOK_DEDUPE_TTL_MS = Number.isFinite(parsedWebhookTtlMs)
+  ? parsedWebhookTtlMs
+  : 600000;
+const webhookDedupeStore = new Map<string, number>();
+
+function getWebhookDedupeKey(req: Request): string | null {
+  const signature = req.headers["x-tavus-signature"];
+  if (typeof signature === "string" && signature.length > 0) {
+    return `sig:${signature}`;
+  }
+
+  const rawBody = req.rawBody instanceof Buffer
+    ? req.rawBody
+    : Buffer.from(JSON.stringify(req.body ?? {}));
+  const hash = createHash("sha256").update(rawBody).digest("hex");
+  return `body:${hash}`;
+}
+
+function isDuplicateWebhook(key: string): boolean {
+  const now = Date.now();
+  const existing = webhookDedupeStore.get(key);
+  if (existing && existing > now) {
+    return true;
+  }
+  webhookDedupeStore.set(key, now + WEBHOOK_DEDUPE_TTL_MS);
+  return false;
+}
+
+function verifyWebhookSignature(req: Request, secret: string): boolean {
+  const signature = req.headers["x-tavus-signature"];
+  if (typeof signature !== "string" || signature.length === 0) {
+    return false;
+  }
+
+  const rawBody = req.rawBody instanceof Buffer
+    ? req.rawBody
+    : Buffer.from(JSON.stringify(req.body ?? {}));
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  return signature === expected;
+}
+
+function extractWebhookConversationId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = record.conversation_id ?? record.conversationId;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+  const data = record.data;
+  if (data && typeof data === "object") {
+    const nested = (data as Record<string, unknown>).conversation_id
+      ?? (data as Record<string, unknown>).conversationId;
+    if (typeof nested === "string" && nested.length > 0) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+function extractWebhookSessionId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = record.session_id ?? record.sessionId;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+  const data = record.data;
+  if (data && typeof data === "object") {
+    const nested = (data as Record<string, unknown>).session_id
+      ?? (data as Record<string, unknown>).sessionId;
+    if (typeof nested === "string" && nested.length > 0) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+function withRateLimit(
+  req: Request,
+  res: { status: (code: number) => any; json: (body: unknown) => any; setHeader: (name: string, value: string) => any },
+  limiter: ReturnType<typeof createRateLimiter>,
+  keySuffix: string,
+) {
+  const ip = req.ip || "unknown";
+  const result = limiter(`${ip}:${keySuffix}`);
+  res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+  res.setHeader("X-RateLimit-Reset", String(result.resetAt));
+  if (!result.allowed) {
+    const retryAfterSeconds = Math.ceil(Math.max(result.resetAt - Date.now(), 0) / 1000);
+    res.setHeader("Retry-After", String(retryAfterSeconds));
+    res.status(429).json({ error: "Too many requests" });
+    return false;
+  }
+  return true;
+}
 
 const createConversationSchema = z.object({
   sessionId: z.string(),
@@ -17,6 +225,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.status(200).json({ ok: true });
   });
 
+  app.get("/api/public/apps/:slug", async (req, res) => {
+    const requestId = req.headers["x-request-id"] || "unknown";
+    if (!withRateLimit(req, res, appConfigLimiter, "public-app")) {
+      return;
+    }
+
+    try {
+      const { slug } = appSlugSchema.parse(req.params);
+      const appConfig = await fetchPublicAppConfig(slug);
+
+      if (!appConfig) {
+        return res.status(404).json({ error: "App not found" });
+      }
+
+      res.json(appConfig);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`public.app-config error requestId=${requestId} message=${errorMessage}`);
+
+      if (error instanceof ZodError) {
+        return res.status(400).json({
+          error: "Invalid request data",
+          details: error.errors,
+        });
+      }
+
+      res.status(500).json({ error: "Failed to load app configuration" });
+    }
+  });
+
+  app.post("/api/public/leads", async (req, res) => {
+    const requestId = req.headers["x-request-id"] || "unknown";
+    if (!withRateLimit(req, res, leadLimiter, "public-lead")) {
+      return;
+    }
+
+    try {
+      const { appSlug, name, email, phone, source } = leadCaptureSchema.parse(req.body);
+      const leadSource = normalizeSource(source);
+      const appRecord = await fetchLeadCaptureApp(appSlug);
+
+      if (!appRecord) {
+        return res.status(404).json({ error: "App not found" });
+      }
+
+      if (!appRecord.leadCaptureEnabled) {
+        return res.status(403).json({ error: "Lead capture disabled" });
+      }
+
+      await supabaseRest("/rest/v1/leads", {
+        method: "POST",
+        headers: {
+          Prefer: "return=minimal",
+        },
+        body: {
+          app_id: appRecord.id,
+          name,
+          email,
+          phone,
+          source: leadSource,
+        },
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`public.lead error requestId=${requestId} message=${errorMessage}`);
+
+      if (error instanceof ZodError) {
+        return res.status(400).json({
+          error: "Invalid request data",
+          details: error.errors,
+        });
+      }
+
+      res.status(500).json({ error: "Failed to capture lead" });
+    }
+  });
+
   // Create Tavus conversation
   app.post("/api/conversations", async (req, res) => {
     try {
@@ -26,6 +313,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validSources = ['nfc', 'qr', 'link', 'direct'];
       const normalizedSource = source ? source.trim().toLowerCase() : 'direct';
       const trafficSource = validSources.includes(normalizedSource) ? normalizedSource : 'direct';
+
+      const existingSession = await storage.getSession(sessionId);
+      if (existingSession) {
+        if (isSessionExpired(existingSession)) {
+          await storage.updateSession(sessionId, { status: "expired" });
+        } else {
+          const normalizedStatus = normalizeSessionStatus(existingSession.status) || "active";
+          if (
+            existingSession.conversationUrl
+            && existingSession.conversationId
+            && ACTIVE_SESSION_STATUSES.has(normalizedStatus)
+          ) {
+            console.log(`tavus.reuse session=${sessionId.slice(0, 8)} status=${normalizedStatus}`);
+            return res.json({
+              sessionId: existingSession.id,
+              conversationUrl: existingSession.conversationUrl,
+              conversationId: existingSession.conversationId,
+              reused: true,
+            });
+          }
+        }
+      }
       
       console.log(`📊 New conversation - Session: ${sessionId.slice(0, 8)}, Source: ${trafficSource}`);
       console.log(`tavus.create start session=${sessionId.slice(0, 8)} source=${trafficSource}`);
@@ -184,11 +493,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch {
           errorDetails = errorText;
         }
-        
-        return res.status(tavusResponse.status).json({
+
+        const responseBody: Record<string, unknown> = {
           error: "Failed to create Tavus conversation",
           details: errorDetails,
-        });
+        };
+        if (isMaxConcurrentError(errorDetails)) {
+          responseBody.code = "TAVUS_MAX_CONCURRENT";
+        }
+
+        return res.status(tavusResponse.status).json(responseBody);
       }
 
       const tavusData = await tavusResponse.json();
@@ -207,11 +521,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`tavus.create ok status=${tavusResponse.status} id=${conversationId}`);
 
+      const conversationStatus = typeof tavusData.status === "string"
+        ? tavusData.status
+        : "created";
+
       // Store session with conversation data using the provided sessionId
       const session = await storage.createSession(sessionId, {
         conversationId,
         conversationUrl,
-        status: tavusData.status || 'active',
+        status: conversationStatus,
       });
 
       res.json({
@@ -262,20 +580,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/webhook/conversation-ended", async (req, res) => {
     try {
       const WEBHOOK_SECRET = String(process.env.TAVUS_WEBHOOK_SECRET || '').trim();
+      const WEBHOOK_VERIFY = String(process.env.TAVUS_WEBHOOK_VERIFY || "").trim().toLowerCase() === "true";
+
+      const dedupeKey = getWebhookDedupeKey(req);
+      if (dedupeKey && isDuplicateWebhook(dedupeKey)) {
+        console.log("Tavus webhook duplicate event ignored");
+        return res.json({ received: true, duplicate: true });
+      }
       
       // Verify webhook signature if secret is configured
       if (WEBHOOK_SECRET) {
         const signature = req.headers['x-tavus-signature'] as string;
-        // Note: In production, you would verify the signature here
-        // For now, we'll just log the webhook event
         console.log("Tavus webhook signature:", signature ? "present" : "missing");
+
+        if (WEBHOOK_VERIFY && !verifyWebhookSignature(req, WEBHOOK_SECRET)) {
+          console.warn("Tavus webhook signature verification failed");
+          return res.status(401).json({ error: "Invalid signature" });
+        }
       }
 
       // Log the webhook event
       console.log("Tavus conversation ended webhook:", JSON.stringify(req.body, null, 2));
 
-      // You can add custom logic here to handle conversation completion
-      // For example: update session status, send follow-up emails, etc.
+      const webhookSessionId = extractWebhookSessionId(req.body);
+      const webhookConversationId = extractWebhookConversationId(req.body);
+      let updatedSession: Session | undefined;
+      if (webhookSessionId) {
+        updatedSession = await storage.updateSession(webhookSessionId, { status: "ended" });
+      } else if (webhookConversationId) {
+        const matchingSession = await storage.getSessionByConversationId(webhookConversationId);
+        if (matchingSession) {
+          updatedSession = await storage.updateSession(matchingSession.id, { status: "ended" });
+        }
+      }
+
+      if (updatedSession) {
+        console.log(`tavus.webhook ended session=${updatedSession.id.slice(0, 8)}`);
+      } else {
+        console.log("tavus.webhook ended with no matching session");
+      }
 
       res.json({ received: true });
     } catch (error) {
@@ -287,4 +630,117 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
   return httpServer;
+}
+
+type AppConfigRow = {
+  id: string;
+  slug: string;
+  company_name: string | null;
+  company_url: string | null;
+  logo_path: string | null;
+  logo_url: string | null;
+  primary_color: string | null;
+  secondary_color: string | null;
+  background_color: string | null;
+  foreground_color: string | null;
+  scheduling_url: string | null;
+  product_label: string | null;
+  lead_capture_enabled: boolean | null;
+  replica: { id: string; name: string | null; tavus_replica_id: string | null } | null;
+  tenant: { id: string; enabled: boolean | null } | null;
+};
+
+type PublicAppConfig = {
+  id: string;
+  slug: string;
+  companyName: string | null;
+  companyUrl: string | null;
+  logoUrl: string | null;
+  primaryColor: string | null;
+  secondaryColor: string | null;
+  backgroundColor: string | null;
+  foregroundColor: string | null;
+  schedulingUrl: string | null;
+  productLabel: string | null;
+  leadCaptureEnabled: boolean;
+  replica: { id: string; name: string | null; tavusReplicaId: string | null } | null;
+};
+
+async function fetchPublicAppConfig(slug: string): Promise<PublicAppConfig | null> {
+  const params = new URLSearchParams({
+    slug: `eq.${slug}`,
+    enabled: "eq.true",
+    limit: "1",
+    select: [
+      "id",
+      "slug",
+      "company_name",
+      "company_url",
+      "logo_path",
+      "logo_url",
+      "primary_color",
+      "secondary_color",
+      "background_color",
+      "foreground_color",
+      "scheduling_url",
+      "product_label",
+      "lead_capture_enabled",
+      "replica:replicas(id,name,tavus_replica_id)",
+      "tenant:tenants(id,enabled)",
+    ].join(","),
+  });
+
+  const rows = await supabaseRest<AppConfigRow[]>(`/rest/v1/apps?${params.toString()}`);
+  const row = rows?.[0];
+
+  if (!row || row.tenant?.enabled === false) {
+    return null;
+  }
+
+  const logoUrl = buildStoragePublicUrl(row.logo_path || row.logo_url);
+
+  return {
+    id: row.id,
+    slug: row.slug,
+    companyName: row.company_name,
+    companyUrl: row.company_url,
+    logoUrl,
+    primaryColor: row.primary_color,
+    secondaryColor: row.secondary_color,
+    backgroundColor: row.background_color,
+    foregroundColor: row.foreground_color,
+    schedulingUrl: row.scheduling_url,
+    productLabel: row.product_label,
+    leadCaptureEnabled: Boolean(row.lead_capture_enabled),
+    replica: row.replica
+      ? {
+          id: row.replica.id,
+          name: row.replica.name,
+          tavusReplicaId: row.replica.tavus_replica_id,
+        }
+      : null,
+  };
+}
+
+async function fetchLeadCaptureApp(
+  slug: string,
+): Promise<{ id: string; leadCaptureEnabled: boolean } | null> {
+  const params = new URLSearchParams({
+    slug: `eq.${slug}`,
+    enabled: "eq.true",
+    limit: "1",
+    select: ["id", "lead_capture_enabled", "tenant:tenants(id,enabled)"].join(","),
+  });
+
+  const rows = await supabaseRest<AppConfigRow[]>(`/rest/v1/apps?${params.toString()}`);
+  const row = rows?.[0];
+
+  if (!row || row.tenant?.enabled === false) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    leadCaptureEnabled: Boolean(row.lead_capture_enabled),
+  };
 }

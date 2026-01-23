@@ -1,10 +1,12 @@
 import { useRoute, useLocation } from 'wouter';
 import AIConversationInterface from '@/components/AIConversationInterface';
+import { clearConversationSession, getConversationStorageKey } from '@/lib/conversationSession';
 
 export default function Conversation() {
   const [, params] = useRoute('/conversation/:sessionId');
   const [, setLocation] = useLocation();
   const sessionId = params?.sessionId || 'unknown';
+  const storageKey = getConversationStorageKey(null);
 
   // Get query parameters
   const searchParams = new URLSearchParams(window.location.search);
@@ -14,6 +16,7 @@ export default function Conversation() {
 
   const handleConversationEnd = () => {
     console.log('Redirecting to thank you page');
+    clearConversationSession(storageKey);
     setLocation('/thank-you');
   };
 
@@ -25,6 +28,7 @@ export default function Conversation() {
       personaId={personaId}
       replicaId={replicaId}
       source={source}
+      storageKey={storageKey}
     />
   );
 }

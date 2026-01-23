@@ -1,12 +1,20 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Copy, QrCode, Smartphone } from 'lucide-react';
+import { Copy, QrCode } from 'lucide-react';
 import Logo from '@/components/Logo';
 import NFCDetector from '@/components/NFCDetector';
 import { useToast } from '@/hooks/use-toast';
 import QRCode from 'qrcode';
+import {
+  CLIENT_SESSION_TTL_MS,
+  clearConversationSession,
+  getConversationStorageKey,
+  getFreshConversationSession,
+  type StoredConversationSession,
+  writeConversationSession,
+} from '@/lib/conversationSession';
 
 export default function Landing() {
   const [, setLocation] = useLocation();
@@ -14,6 +22,11 @@ export default function Landing() {
   const [showQR, setShowQR] = useState(false);
   const [source, setSource] = useState<string | null>(null);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
+  const [resumeSession, setResumeSession] = useState<StoredConversationSession | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const lastStartRef = useRef(0);
+  const storageKey = getConversationStorageKey(null);
+
   const rawPublicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim();
   const normalizedPublicBaseUrl = rawPublicBaseUrl.replace(/\/+$/, '');
   const baseUrl = normalizedPublicBaseUrl || window.location.origin;
@@ -47,15 +60,78 @@ export default function Landing() {
     }).then(setQrCodeUrl);
   }, []);
 
-  const handleStartConversation = (conversationSource?: string) => {
-    const sessionId = crypto.randomUUID();
+  useEffect(() => {
+    const stored = getFreshConversationSession(storageKey, CLIENT_SESSION_TTL_MS);
+    if (stored?.conversationUrl) {
+      setResumeSession(stored);
+    } else {
+      setResumeSession(null);
+    }
+  }, [storageKey]);
+
+  const beginStart = () => {
+    if (isStarting) {
+      return false;
+    }
+    const now = Date.now();
+    if (now - lastStartRef.current < 800) {
+      return false;
+    }
+    lastStartRef.current = now;
+    setIsStarting(true);
+    return true;
+  };
+
+  const navigateToConversation = (sessionId: string, conversationSource?: string) => {
     const actualSource = conversationSource || source || 'direct';
-    console.log('Starting conversation with session:', sessionId, 'source:', actualSource);
     setLocation(`/conversation/${sessionId}?source=${actualSource}`);
+  };
+
+  const handleStartConversation = (conversationSource?: string) => {
+    if (!beginStart()) {
+      return;
+    }
+    const sessionId = crypto.randomUUID();
+    writeConversationSession(storageKey, {
+      sessionId,
+      startedAt: Date.now(),
+      conversationUrl: null,
+    });
+    setResumeSession(null);
+    navigateToConversation(sessionId, conversationSource);
+  };
+
+  const handleResumeConversation = (conversationSource?: string) => {
+    if (!resumeSession) {
+      return;
+    }
+    if (!beginStart()) {
+      return;
+    }
+    navigateToConversation(resumeSession.sessionId, conversationSource);
+  };
+
+  const handleStartOver = () => {
+    if (!beginStart()) {
+      return;
+    }
+    clearConversationSession(storageKey);
+    setResumeSession(null);
+    const sessionId = crypto.randomUUID();
+    writeConversationSession(storageKey, {
+      sessionId,
+      startedAt: Date.now(),
+      conversationUrl: null,
+    });
+    navigateToConversation(sessionId, source || 'direct');
   };
 
   const handleNFCDetected = () => {
     console.log('NFC tap detected - auto-starting conversation');
+    if (resumeSession?.conversationUrl) {
+      handleResumeConversation('nfc');
+      return;
+    }
     handleStartConversation('nfc');
   };
 
@@ -96,14 +172,39 @@ export default function Landing() {
 
           {/* Start Button */}
           <div className="pt-4">
-            <Button
-              size="lg"
-              className="rounded-full min-h-16 px-12 text-lg font-bold"
-              onClick={() => handleStartConversation()}
-              data-testid="button-start-conversation"
-            >
-              Start Conversation
-            </Button>
+            {resumeSession?.conversationUrl ? (
+              <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                <Button
+                  size="lg"
+                  className="rounded-full min-h-16 px-12 text-lg font-bold"
+                  onClick={() => handleResumeConversation()}
+                  disabled={isStarting}
+                  data-testid="button-resume-conversation"
+                >
+                  Resume Conversation
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="rounded-full min-h-16 px-12 text-lg font-bold"
+                  onClick={handleStartOver}
+                  disabled={isStarting}
+                  data-testid="button-start-over"
+                >
+                  Start Over
+                </Button>
+              </div>
+            ) : (
+              <Button
+                size="lg"
+                className="rounded-full min-h-16 px-12 text-lg font-bold"
+                onClick={() => handleStartConversation()}
+                disabled={isStarting}
+                data-testid="button-start-conversation"
+              >
+                {isStarting ? 'Starting...' : 'Start Conversation'}
+              </Button>
+            )}
           </div>
 
           {/* Sharing Options */}
