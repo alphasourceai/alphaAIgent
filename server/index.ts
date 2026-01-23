@@ -95,13 +95,19 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
-    
-    // Check for required Tavus configuration
-    if (!process.env.TAVUS_API_KEY) {
-      console.warn("WARNING: TAVUS_API_KEY is not configured. Conversations will fail.");
+
+    const tavusApiKey = String(process.env.TAVUS_API_KEY || "").trim();
+    const tavusReplicaId = String(process.env.TAVUS_REPLICA_ID || "").trim();
+    const tavusPersonaId = String(process.env.TAVUS_PERSONA_ID || "").trim();
+
+    if (!tavusReplicaId) {
+      throw new Error("TAVUS_REPLICA_ID is required to start the server.");
     }
-    if (!process.env.TAVUS_REPLICA_ID) {
-      console.warn("WARNING: TAVUS_REPLICA_ID is not configured. Clients must provide replicaId or personaId explicitly.");
+    if (!tavusPersonaId) {
+      throw new Error("TAVUS_PERSONA_ID is required to start the server.");
+    }
+    if (!tavusApiKey) {
+      console.warn("WARNING: TAVUS_API_KEY is not configured. Conversations will fail.");
     }
   });
 })();

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useRoute } from "wouter";
-import { Calendar, Copy, QrCode, Smartphone } from "lucide-react";
+import { Copy, QrCode, Smartphone } from "lucide-react";
 import QRCode from "qrcode";
 import NFCDetector from "@/components/NFCDetector";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,14 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { fetchAppConfig, type AppConfig } from "@/lib/appConfig";
+import {
+  CLIENT_SESSION_TTL_MS,
+  clearConversationSession,
+  getConversationStorageKey,
+  getFreshConversationSession,
+  type StoredConversationSession,
+  writeConversationSession,
+} from "@/lib/conversationSession";
 
 const DEFAULT_PRIMARY = "#AD8BF7";
 const DEFAULT_SECONDARY = "#061551";
@@ -54,6 +62,7 @@ export default function AppLanding() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const slug = params?.slug;
+  const storageKey = useMemo(() => getConversationStorageKey(slug), [slug]);
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -64,6 +73,9 @@ export default function AppLanding() {
   const [leadEmail, setLeadEmail] = useState("");
   const [leadPhone, setLeadPhone] = useState("");
   const [isSubmittingLead, setIsSubmittingLead] = useState(false);
+  const [resumeSession, setResumeSession] = useState<StoredConversationSession | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const lastStartRef = useRef(0);
 
   const rawPublicBaseUrl = String(process.env.PUBLIC_BASE_URL || "").trim();
   const normalizedPublicBaseUrl = rawPublicBaseUrl.replace(/\/+$/, "");
@@ -107,6 +119,15 @@ export default function AppLanding() {
     };
   }, [slug]);
 
+  useEffect(() => {
+    const stored = getFreshConversationSession(storageKey, CLIENT_SESSION_TTL_MS);
+    if (stored?.conversationUrl) {
+      setResumeSession(stored);
+    } else {
+      setResumeSession(null);
+    }
+  }, [storageKey]);
+
   const primaryColor = normalizeHex(appConfig?.primaryColor ?? null, DEFAULT_PRIMARY);
   const secondaryColor = normalizeHex(appConfig?.secondaryColor ?? null, DEFAULT_SECONDARY);
   const backgroundBase = appConfig?.backgroundColor
@@ -146,17 +167,69 @@ export default function AppLanding() {
       });
   }, [appConfig, baseUrl, primaryColor, backgroundBase]);
 
-  const startConversation = (conversationSource?: string) => {
+  const beginStart = () => {
+    if (isStarting) {
+      return false;
+    }
+    const now = Date.now();
+    if (now - lastStartRef.current < 800) {
+      return false;
+    }
+    lastStartRef.current = now;
+    setIsStarting(true);
+    return true;
+  };
+
+  const navigateToConversation = (sessionId: string, conversationSource?: string) => {
     if (!appConfig) {
       return;
     }
-    const sessionId = crypto.randomUUID();
     const actualSource = conversationSource || source || "direct";
     setLocation(`/a/${appConfig.slug}/conversation/${sessionId}?source=${actualSource}`);
   };
 
+  const startNewConversation = (conversationSource?: string) => {
+    const sessionId = crypto.randomUUID();
+    writeConversationSession(storageKey, {
+      sessionId,
+      startedAt: Date.now(),
+      conversationUrl: null,
+    });
+    setResumeSession(null);
+    navigateToConversation(sessionId, conversationSource);
+  };
+
+  const handleStartConversation = (conversationSource?: string) => {
+    if (!beginStart()) {
+      return;
+    }
+    startNewConversation(conversationSource);
+  };
+
+  const handleResumeConversation = (conversationSource?: string) => {
+    if (!resumeSession) {
+      return;
+    }
+    if (!beginStart()) {
+      return;
+    }
+    navigateToConversation(resumeSession.sessionId, conversationSource);
+  };
+
+  const handleStartOver = () => {
+    if (!beginStart()) {
+      return;
+    }
+    clearConversationSession(storageKey);
+    setResumeSession(null);
+    startNewConversation(source || "direct");
+  };
+
   const handleLeadSubmit = async () => {
     if (!appConfig) {
+      return;
+    }
+    if (!beginStart()) {
       return;
     }
     setIsSubmittingLead(true);
@@ -182,7 +255,11 @@ export default function AppLanding() {
     }
 
     setIsSubmittingLead(false);
-    startConversation();
+    if (resumeSession?.conversationUrl) {
+      clearConversationSession(storageKey);
+      setResumeSession(null);
+    }
+    startNewConversation();
   };
 
   const handleCopyLink = () => {
@@ -199,7 +276,11 @@ export default function AppLanding() {
   };
 
   const handleNFCDetected = () => {
-    startConversation("nfc");
+    if (resumeSession?.conversationUrl) {
+      handleResumeConversation("nfc");
+      return;
+    }
+    handleStartConversation("nfc");
   };
 
   if (isLoading) {
@@ -226,6 +307,8 @@ export default function AppLanding() {
       </div>
     );
   }
+
+  const isActionDisabled = isStarting || isSubmittingLead;
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: backgroundStyle, color: textColor }}>
@@ -257,6 +340,42 @@ export default function AppLanding() {
           <div className="flex justify-center">
             <NFCDetector onNFCDetected={handleNFCDetected} />
           </div>
+
+          {resumeSession?.conversationUrl && (
+            <div className="pt-2">
+              <Card className="p-6" style={{ backgroundColor: cardColor, borderColor }}>
+                <div className="space-y-4 text-left">
+                  <div>
+                    <h3 className="text-lg font-semibold">Resume your conversation?</h3>
+                    <p className="text-sm" style={{ color: mutedTextColor }}>
+                      Pick up where you left off or start fresh.
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <Button
+                      size="lg"
+                      className="w-full rounded-full min-h-12 text-lg font-semibold"
+                      style={{ backgroundColor: primaryColor, color: buttonTextColor, borderColor: primaryColor }}
+                      onClick={() => handleResumeConversation()}
+                      disabled={isActionDisabled}
+                    >
+                      Resume Conversation
+                    </Button>
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      className="w-full rounded-full min-h-12 text-lg font-semibold"
+                      style={{ borderColor, color: textColor }}
+                      onClick={handleStartOver}
+                      disabled={isActionDisabled}
+                    >
+                      Start Over
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
 
           {appConfig.leadCaptureEnabled ? (
             <Card className="p-6" style={{ backgroundColor: cardColor, borderColor }}>
@@ -293,40 +412,27 @@ export default function AppLanding() {
                   className="w-full rounded-full min-h-12 text-lg font-semibold"
                   style={{ backgroundColor: primaryColor, color: buttonTextColor, borderColor: primaryColor }}
                   onClick={handleLeadSubmit}
-                  disabled={isSubmittingLead}
+                  disabled={isActionDisabled}
                 >
-                  {isSubmittingLead ? "Starting..." : "Start Conversation"}
+                  {isActionDisabled ? "Starting..." : (resumeSession?.conversationUrl ? "Start Over" : "Start Conversation")}
                 </Button>
               </div>
             </Card>
           ) : (
-            <div className="pt-4">
-              <Button
-                size="lg"
-                className="rounded-full min-h-12 px-10 text-lg font-semibold"
-                style={{ backgroundColor: primaryColor, color: buttonTextColor, borderColor: primaryColor }}
-                onClick={() => startConversation()}
-              >
-                Start Conversation
-              </Button>
-            </div>
+            !resumeSession?.conversationUrl && (
+              <div className="pt-4">
+                <Button
+                  size="lg"
+                  className="rounded-full min-h-12 px-10 text-lg font-semibold"
+                  style={{ backgroundColor: primaryColor, color: buttonTextColor, borderColor: primaryColor }}
+                  onClick={() => handleStartConversation()}
+                  disabled={isActionDisabled}
+                >
+                  {isActionDisabled ? "Starting..." : "Start Conversation"}
+                </Button>
+              </div>
+            )
           )}
-
-          {appConfig.schedulingUrl ? (
-            <div className="pt-2 flex justify-center">
-              <Button
-                asChild
-                variant="outline"
-                className="rounded-full min-h-12 px-8 text-base font-semibold"
-                style={{ borderColor, color: textColor }}
-              >
-                <a href={appConfig.schedulingUrl} target="_blank" rel="noreferrer">
-                  <Calendar className="h-4 w-4 mr-2" />
-                  Schedule Time
-                </a>
-              </Button>
-            </div>
-          ) : null}
 
           <div className="pt-8">
             <Card className="p-6" style={{ backgroundColor: cardColor, borderColor }}>

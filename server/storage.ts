@@ -3,6 +3,7 @@ import { supabaseRest } from "./supabase";
 
 export interface IStorage {
   getSession(id: string): Promise<Session | undefined>;
+  getSessionByConversationId(conversationId: string): Promise<Session | undefined>;
   createSession(id: string, session: InsertSession): Promise<Session>;
   updateSession(id: string, session: Partial<InsertSession>): Promise<Session | undefined>;
 }
@@ -75,6 +76,15 @@ export class SupabaseStorage implements IStorage {
     const rows = await supabaseRest<SessionRow[]>(`/rest/v1/sessions?${params.toString()}`);
     const row = rows?.[0];
     return row ? mapRowToSession(row) : undefined;
+  }
+
+  async getSessionByConversationId(conversationId: string): Promise<Session | undefined> {
+    for (const session of this.sessions.values()) {
+      if (session.conversationId === conversationId) {
+        return session;
+      }
+    }
+    return undefined;
   }
 
   async createSession(id: string, insertSession: InsertSession): Promise<Session> {

@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import AIConversationInterface from "@/components/AIConversationInterface";
-import { fetchAppConfig, type AppConfig } from "@/lib/appConfig";
+import { fetchAppConfig } from "@/lib/appConfig";
 import { Button } from "@/components/ui/button";
+import { clearConversationSession, getConversationStorageKey } from "@/lib/conversationSession";
 
 export default function AppConversation() {
   const [, params] = useRoute("/a/:slug/conversation/:sessionId");
   const [, setLocation] = useLocation();
   const slug = params?.slug;
   const sessionId = params?.sessionId || "unknown";
+  const storageKey = getConversationStorageKey(slug);
 
-  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+  const [replicaId, setReplicaId] = useState<string | undefined>(undefined);
+  const [personaId, setPersonaId] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -27,7 +30,8 @@ export default function AppConversation() {
     fetchAppConfig(slug)
       .then((config) => {
         if (isActive) {
-          setAppConfig(config);
+          setReplicaId(config.replica?.tavusReplicaId || undefined);
+          setPersonaId(config.replica?.tavusPersonaId || undefined);
           setIsLoading(false);
         }
       })
@@ -48,6 +52,7 @@ export default function AppConversation() {
   const source = searchParams.get("source") || undefined;
 
   const handleConversationEnd = () => {
+    clearConversationSession(storageKey);
     if (slug) {
       setLocation(`/a/${slug}`);
       return;
@@ -78,28 +83,15 @@ export default function AppConversation() {
     );
   }
 
-  if (!appConfig) {
-    return (
-      <div className="flex flex-col h-screen bg-background items-center justify-center">
-        <div className="text-center space-y-4 max-w-md px-4">
-          <div className="text-destructive text-4xl mb-4">⚠️</div>
-          <div>
-            <h3 className="text-xl font-semibold mb-2">Unable to Load App</h3>
-            <p className="text-sm text-muted-foreground mb-6">App configuration is missing.</p>
-            <Button onClick={handleConversationEnd}>Return</Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <AIConversationInterface
       sessionId={sessionId}
       onEnd={handleConversationEnd}
-      conversationDuration={appConfig.conversationDurationSeconds ?? 150}
-      appSlug={slug}
+      conversationDuration={150}
+      personaId={personaId}
+      replicaId={replicaId}
       source={source}
+      storageKey={storageKey}
     />
   );
 }
