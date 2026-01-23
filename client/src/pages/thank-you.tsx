@@ -1,9 +1,11 @@
+import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CheckCircle2, ExternalLink, Calendar } from 'lucide-react';
 import Logo from '@/components/Logo';
 
 export default function ThankYou() {
+  const [, setLocation] = useLocation();
   const websiteUrl = 'https://www.alphasourceai.com';
   const scheduleUrl = 'https://calendar.google.com/appointments/schedules/AcZssZ2il6qD_fWs-kW8BdxTg_wwTkHk2bMnjCnTTNKWgWqNN0OdE-3Xj2lFKQ8Mu10mY3Ia7jsIpqVs';
 
@@ -13,6 +15,14 @@ export default function ThankYou() {
 
   const handleScheduleDemo = () => {
     window.open(scheduleUrl, '_blank');
+  };
+
+  const handleBackHome = () => {
+    if (typeof setLocation === 'function') {
+      setLocation('/');
+      return;
+    }
+    window.location.assign('/');
   };
 
   return (
@@ -66,6 +76,16 @@ export default function ThankYou() {
             >
               <Calendar className="h-5 w-5 mr-2" />
               Schedule a Demo
+            </Button>
+
+            <Button
+              size="lg"
+              variant="ghost"
+              className="w-full rounded-full min-h-14 text-lg"
+              onClick={handleBackHome}
+              data-testid="button-back-home"
+            >
+              Back to Home
             </Button>
 
             <p className="text-sm text-muted-foreground pt-2">

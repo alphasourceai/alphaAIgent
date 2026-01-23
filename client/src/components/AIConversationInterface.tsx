@@ -43,6 +43,7 @@ export default function AIConversationInterface({
   const [, setLocation] = useLocation();
   const createInFlightRef = useRef(false);
   const lastSessionRef = useRef<string | null>(null);
+  const preflightStreamRef = useRef<MediaStream | null>(null);
 
   const resumeSession = storageKey
     ? getFreshConversationSession(storageKey, CLIENT_SESSION_TTL_MS)
@@ -76,6 +77,53 @@ export default function AIConversationInterface({
     return `/conversation/${nextSessionId}${search}`;
   };
 
+  const stopPreflightStream = () => {
+    const stream = preflightStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      preflightStreamRef.current = null;
+    }
+  };
+
+  const getMediaErrorMessage = (errorName?: string) => {
+    if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
+      return 'Camera/mic access is blocked. Please click the camera icon in your browser address bar and allow access, then retry.';
+    }
+    if (errorName === 'NotFoundError') {
+      return 'No camera or microphone was detected. Please connect a device and retry.';
+    }
+    return 'Unable to access camera/mic. Please check browser permissions and retry.';
+  };
+
+  const preflightMediaPermissions = async (sessionLabel: string) => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast({
+        title: 'Camera/Mic Required',
+        description: 'Your browser does not support camera/mic access. Please try a supported browser.',
+        variant: 'destructive',
+      });
+      console.warn(`resume.preflight failed session=${sessionLabel} name=Unsupported`);
+      return false;
+    }
+    stopPreflightStream();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      preflightStreamRef.current = stream;
+      stopPreflightStream();
+      return true;
+    } catch (err) {
+      const errorName = err instanceof Error ? err.name : 'UnknownError';
+      console.warn(`resume.preflight failed session=${sessionLabel} name=${errorName}`);
+      toast({
+        title: 'Camera/Mic Required',
+        description: getMediaErrorMessage(errorName),
+        variant: 'destructive',
+      });
+      stopPreflightStream();
+      return false;
+    }
+  };
+
   const createConversation = async () => {
     if (createInFlightRef.current) {
       return;
@@ -84,6 +132,7 @@ export default function AIConversationInterface({
     setIsLoading(true);
     setError(null);
     setErrorCode(null);
+    setConversationUrl(null);
 
     try {
       const response = await fetch('/api/conversations', {
@@ -171,13 +220,25 @@ export default function AIConversationInterface({
     createConversation();
   }, [sessionId]);
 
+  useEffect(() => {
+    return () => {
+      stopPreflightStream();
+    };
+  }, []);
+
   const handleEndConversation = () => {
     console.log('Conversation ended by user');
+    stopPreflightStream();
     onEnd();
   };
 
-  const handleResumeConversation = () => {
+  const handleResumeConversation = async () => {
     if (!resumeSession || !resumeSession.conversationUrl) {
+      return;
+    }
+    const sessionLabel = resumeSession.sessionId.slice(0, 8);
+    const hasMediaAccess = await preflightMediaPermissions(sessionLabel);
+    if (!hasMediaAccess) {
       return;
     }
     setLocation(buildConversationPath(resumeSession.sessionId));

@@ -25,6 +25,7 @@ export default function Landing() {
   const [resumeSession, setResumeSession] = useState<StoredConversationSession | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const lastStartRef = useRef(0);
+  const preflightStreamRef = useRef<MediaStream | null>(null);
   const storageKey = getConversationStorageKey(null);
 
   const rawPublicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim();
@@ -69,6 +70,16 @@ export default function Landing() {
     }
   }, [storageKey]);
 
+  useEffect(() => {
+    return () => {
+      const stream = preflightStreamRef.current;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+        preflightStreamRef.current = null;
+      }
+    };
+  }, []);
+
   const beginStart = () => {
     if (isStarting) {
       return false;
@@ -80,6 +91,53 @@ export default function Landing() {
     lastStartRef.current = now;
     setIsStarting(true);
     return true;
+  };
+
+  const stopPreflightStream = () => {
+    const stream = preflightStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      preflightStreamRef.current = null;
+    }
+  };
+
+  const getMediaErrorMessage = (errorName?: string) => {
+    if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
+      return 'Camera/mic access is blocked. Please click the camera icon in your browser address bar and allow access, then retry.';
+    }
+    if (errorName === 'NotFoundError') {
+      return 'No camera or microphone was detected. Please connect a device and retry.';
+    }
+    return 'Unable to access camera/mic. Please check browser permissions and retry.';
+  };
+
+  const preflightMediaPermissions = async (sessionLabel: string) => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast({
+        title: 'Camera/Mic Required',
+        description: 'Your browser does not support camera/mic access. Please try a supported browser.',
+        variant: 'destructive',
+      });
+      console.warn(`resume.preflight failed session=${sessionLabel} name=Unsupported`);
+      return false;
+    }
+    stopPreflightStream();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      preflightStreamRef.current = stream;
+      stopPreflightStream();
+      return true;
+    } catch (err) {
+      const errorName = err instanceof Error ? err.name : 'UnknownError';
+      console.warn(`resume.preflight failed session=${sessionLabel} name=${errorName}`);
+      toast({
+        title: 'Camera/Mic Required',
+        description: getMediaErrorMessage(errorName),
+        variant: 'destructive',
+      });
+      stopPreflightStream();
+      return false;
+    }
   };
 
   const navigateToConversation = (sessionId: string, conversationSource?: string) => {
@@ -101,11 +159,17 @@ export default function Landing() {
     navigateToConversation(sessionId, conversationSource);
   };
 
-  const handleResumeConversation = (conversationSource?: string) => {
+  const handleResumeConversation = async (conversationSource?: string) => {
     if (!resumeSession) {
       return;
     }
     if (!beginStart()) {
+      return;
+    }
+    const sessionLabel = resumeSession.sessionId.slice(0, 8);
+    const hasMediaAccess = await preflightMediaPermissions(sessionLabel);
+    if (!hasMediaAccess) {
+      setIsStarting(false);
       return;
     }
     navigateToConversation(resumeSession.sessionId, conversationSource);
@@ -129,7 +193,7 @@ export default function Landing() {
   const handleNFCDetected = () => {
     console.log('NFC tap detected - auto-starting conversation');
     if (resumeSession?.conversationUrl) {
-      handleResumeConversation('nfc');
+      void handleResumeConversation('nfc');
       return;
     }
     handleStartConversation('nfc');
