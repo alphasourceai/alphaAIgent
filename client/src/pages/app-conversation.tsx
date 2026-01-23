@@ -13,6 +13,7 @@ export default function AppConversation() {
   const storageKey = getConversationStorageKey(slug);
 
   const [replicaId, setReplicaId] = useState<string | undefined>(undefined);
+  const [personaId, setPersonaId] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -30,6 +31,7 @@ export default function AppConversation() {
       .then((config) => {
         if (isActive) {
           setReplicaId(config.replica?.tavusReplicaId || undefined);
+          setPersonaId(config.replica?.tavusPersonaId || undefined);
           setIsLoading(false);
         }
       })
@@ -86,6 +88,7 @@ export default function AppConversation() {
       sessionId={sessionId}
       onEnd={handleConversationEnd}
       conversationDuration={150}
+      personaId={personaId}
       replicaId={replicaId}
       source={source}
       storageKey={storageKey}

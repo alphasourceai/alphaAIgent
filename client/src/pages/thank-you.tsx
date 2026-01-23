@@ -5,13 +5,14 @@ import Logo from '@/components/Logo';
 
 export default function ThankYou() {
   const websiteUrl = 'https://www.alphasourceai.com';
+  const scheduleUrl = 'https://calendar.google.com/appointments/schedules/AcZssZ2il6qD_fWs-kW8BdxTg_wwTkHk2bMnjCnTTNKWgWqNN0OdE-3Xj2lFKQ8Mu10mY3Ia7jsIpqVs';
 
   const handleVisitWebsite = () => {
     window.open(websiteUrl, '_blank');
   };
 
   const handleScheduleDemo = () => {
-    window.open(websiteUrl + '#demo', '_blank');
+    window.open(scheduleUrl, '_blank');
   };
 
   return (

@@ -9,10 +9,14 @@ import Landing from "@/pages/landing";
 import Conversation from "@/pages/conversation";
 import ThankYou from "@/pages/thank-you";
 import SplashScreen from "@/components/SplashScreen";
+import AppLanding from "@/pages/app-landing";
+import AppConversation from "@/pages/app-conversation";
 
 function Router() {
   return (
     <Switch>
+      <Route path="/a/:slug/conversation/:sessionId" component={AppConversation} />
+      <Route path="/a/:slug" component={AppLanding} />
       <Route path="/" component={Landing} />
       <Route path="/conversation/:sessionId" component={Conversation} />
       <Route path="/thank-you" component={ThankYou} />

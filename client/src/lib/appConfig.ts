@@ -11,7 +11,12 @@ export type AppConfig = {
   schedulingUrl: string | null;
   productLabel: string | null;
   leadCaptureEnabled: boolean;
-  replica: { id: string; name: string | null; tavusReplicaId: string | null } | null;
+  replica: {
+    id: string;
+    name: string | null;
+    tavusReplicaId: string | null;
+    tavusPersonaId: string | null;
+  } | null;
 };
 
 export async function fetchAppConfig(slug: string): Promise<AppConfig> {
