@@ -8,11 +8,8 @@ import NFCDetector from '@/components/NFCDetector';
 import { useToast } from '@/hooks/use-toast';
 import QRCode from 'qrcode';
 import {
-  CLIENT_SESSION_TTL_MS,
   clearConversationSession,
   getConversationStorageKey,
-  getFreshConversationSession,
-  type StoredConversationSession,
   writeConversationSession,
 } from '@/lib/conversationSession';
 
@@ -22,10 +19,8 @@ export default function Landing() {
   const [showQR, setShowQR] = useState(false);
   const [source, setSource] = useState<string | null>(null);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
-  const [resumeSession, setResumeSession] = useState<StoredConversationSession | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const lastStartRef = useRef(0);
-  const preflightStreamRef = useRef<MediaStream | null>(null);
   const storageKey = getConversationStorageKey(null);
 
   const rawPublicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim();
@@ -62,23 +57,8 @@ export default function Landing() {
   }, []);
 
   useEffect(() => {
-    const stored = getFreshConversationSession(storageKey, CLIENT_SESSION_TTL_MS);
-    if (stored?.conversationUrl) {
-      setResumeSession(stored);
-    } else {
-      setResumeSession(null);
-    }
+    clearConversationSession(storageKey);
   }, [storageKey]);
-
-  useEffect(() => {
-    return () => {
-      const stream = preflightStreamRef.current;
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-        preflightStreamRef.current = null;
-      }
-    };
-  }, []);
 
   const beginStart = () => {
     if (isStarting) {
@@ -91,53 +71,6 @@ export default function Landing() {
     lastStartRef.current = now;
     setIsStarting(true);
     return true;
-  };
-
-  const stopPreflightStream = () => {
-    const stream = preflightStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      preflightStreamRef.current = null;
-    }
-  };
-
-  const getMediaErrorMessage = (errorName?: string) => {
-    if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
-      return 'Camera/mic access is blocked. Please click the camera icon in your browser address bar and allow access, then retry.';
-    }
-    if (errorName === 'NotFoundError') {
-      return 'No camera or microphone was detected. Please connect a device and retry.';
-    }
-    return 'Unable to access camera/mic. Please check browser permissions and retry.';
-  };
-
-  const preflightMediaPermissions = async (sessionLabel: string) => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      toast({
-        title: 'Camera/Mic Required',
-        description: 'Your browser does not support camera/mic access. Please try a supported browser.',
-        variant: 'destructive',
-      });
-      console.warn(`resume.preflight failed session=${sessionLabel} name=Unsupported`);
-      return false;
-    }
-    stopPreflightStream();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      preflightStreamRef.current = stream;
-      stopPreflightStream();
-      return true;
-    } catch (err) {
-      const errorName = err instanceof Error ? err.name : 'UnknownError';
-      console.warn(`resume.preflight failed session=${sessionLabel} name=${errorName}`);
-      toast({
-        title: 'Camera/Mic Required',
-        description: getMediaErrorMessage(errorName),
-        variant: 'destructive',
-      });
-      stopPreflightStream();
-      return false;
-    }
   };
 
   const navigateToConversation = (sessionId: string, conversationSource?: string) => {
@@ -155,47 +88,11 @@ export default function Landing() {
       startedAt: Date.now(),
       conversationUrl: null,
     });
-    setResumeSession(null);
     navigateToConversation(sessionId, conversationSource);
-  };
-
-  const handleResumeConversation = async (conversationSource?: string) => {
-    if (!resumeSession) {
-      return;
-    }
-    if (!beginStart()) {
-      return;
-    }
-    const sessionLabel = resumeSession.sessionId.slice(0, 8);
-    const hasMediaAccess = await preflightMediaPermissions(sessionLabel);
-    if (!hasMediaAccess) {
-      setIsStarting(false);
-      return;
-    }
-    navigateToConversation(resumeSession.sessionId, conversationSource);
-  };
-
-  const handleStartOver = () => {
-    if (!beginStart()) {
-      return;
-    }
-    clearConversationSession(storageKey);
-    setResumeSession(null);
-    const sessionId = crypto.randomUUID();
-    writeConversationSession(storageKey, {
-      sessionId,
-      startedAt: Date.now(),
-      conversationUrl: null,
-    });
-    navigateToConversation(sessionId, source || 'direct');
   };
 
   const handleNFCDetected = () => {
     console.log('NFC tap detected - auto-starting conversation');
-    if (resumeSession?.conversationUrl) {
-      void handleResumeConversation('nfc');
-      return;
-    }
     handleStartConversation('nfc');
   };
 
@@ -236,39 +133,15 @@ export default function Landing() {
 
           {/* Start Button */}
           <div className="pt-4">
-            {resumeSession?.conversationUrl ? (
-              <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <Button
-                  size="lg"
-                  className="rounded-full min-h-16 px-12 text-lg font-bold"
-                  onClick={() => handleResumeConversation()}
-                  disabled={isStarting}
-                  data-testid="button-resume-conversation"
-                >
-                  Resume Conversation
-                </Button>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="rounded-full min-h-16 px-12 text-lg font-bold"
-                  onClick={handleStartOver}
-                  disabled={isStarting}
-                  data-testid="button-start-over"
-                >
-                  Start Over
-                </Button>
-              </div>
-            ) : (
-              <Button
-                size="lg"
-                className="rounded-full min-h-16 px-12 text-lg font-bold"
-                onClick={() => handleStartConversation()}
-                disabled={isStarting}
-                data-testid="button-start-conversation"
-              >
-                {isStarting ? 'Starting...' : 'Start Conversation'}
-              </Button>
-            )}
+            <Button
+              size="lg"
+              className="rounded-full min-h-16 px-12 text-lg font-bold"
+              onClick={() => handleStartConversation()}
+              disabled={isStarting}
+              data-testid="button-start-conversation"
+            >
+              {isStarting ? 'Starting...' : 'Start Conversation'}
+            </Button>
           </div>
 
           {/* Sharing Options */}

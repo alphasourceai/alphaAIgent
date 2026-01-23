@@ -6,9 +6,7 @@ import ConversationTimer from './ConversationTimer';
 import { DailyVideoInterface } from './DailyVideoInterface';
 import { useToast } from '@/hooks/use-toast';
 import {
-  CLIENT_SESSION_TTL_MS,
   clearConversationSession,
-  getFreshConversationSession,
   readConversationSession,
   updateConversationSession,
   writeConversationSession,
@@ -39,34 +37,11 @@ export default function AIConversationInterface({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const createInFlightRef = useRef(false);
   const lastSessionRef = useRef<string | null>(null);
-  const preflightStreamRef = useRef<MediaStream | null>(null);
-
-  const resumeSession = storageKey
-    ? getFreshConversationSession(storageKey, CLIENT_SESSION_TTL_MS)
-    : null;
-  const canResume = Boolean(
-    resumeSession?.conversationUrl && resumeSession.sessionId !== sessionId,
-  );
-
-  const persistConversationSession = (url: string) => {
-    if (!storageKey) {
-      return;
-    }
-    const existing = readConversationSession(storageKey);
-    if (!existing || existing.sessionId !== sessionId) {
-      writeConversationSession(storageKey, {
-        sessionId,
-        startedAt: Date.now(),
-        conversationUrl: url,
-      });
-      return;
-    }
-    updateConversationSession(storageKey, { conversationUrl: url });
-  };
 
   const buildConversationPath = (nextSessionId: string) => {
     const currentPath = window.location.pathname;
@@ -77,51 +52,20 @@ export default function AIConversationInterface({
     return `/conversation/${nextSessionId}${search}`;
   };
 
-  const stopPreflightStream = () => {
-    const stream = preflightStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      preflightStreamRef.current = null;
+  const persistConversationSessionForId = (url: string, targetSessionId: string) => {
+    if (!storageKey) {
+      return;
     }
-  };
-
-  const getMediaErrorMessage = (errorName?: string) => {
-    if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
-      return 'Camera/mic access is blocked. Please click the camera icon in your browser address bar and allow access, then retry.';
-    }
-    if (errorName === 'NotFoundError') {
-      return 'No camera or microphone was detected. Please connect a device and retry.';
-    }
-    return 'Unable to access camera/mic. Please check browser permissions and retry.';
-  };
-
-  const preflightMediaPermissions = async (sessionLabel: string) => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      toast({
-        title: 'Camera/Mic Required',
-        description: 'Your browser does not support camera/mic access. Please try a supported browser.',
-        variant: 'destructive',
+    const existing = readConversationSession(storageKey);
+    if (!existing || existing.sessionId !== targetSessionId) {
+      writeConversationSession(storageKey, {
+        sessionId: targetSessionId,
+        startedAt: Date.now(),
+        conversationUrl: url,
       });
-      console.warn(`resume.preflight failed session=${sessionLabel} name=Unsupported`);
-      return false;
+      return;
     }
-    stopPreflightStream();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      preflightStreamRef.current = stream;
-      stopPreflightStream();
-      return true;
-    } catch (err) {
-      const errorName = err instanceof Error ? err.name : 'UnknownError';
-      console.warn(`resume.preflight failed session=${sessionLabel} name=${errorName}`);
-      toast({
-        title: 'Camera/Mic Required',
-        description: getMediaErrorMessage(errorName),
-        variant: 'destructive',
-      });
-      stopPreflightStream();
-      return false;
-    }
+    updateConversationSession(storageKey, { conversationUrl: url });
   };
 
   const createConversation = async () => {
@@ -132,7 +76,9 @@ export default function AIConversationInterface({
     setIsLoading(true);
     setError(null);
     setErrorCode(null);
+    setSessionExpired(false);
     setConversationUrl(null);
+    const targetSessionId = sessionId;
 
     try {
       const response = await fetch('/api/conversations', {
@@ -142,9 +88,7 @@ export default function AIConversationInterface({
         },
         credentials: 'include',
         body: JSON.stringify({
-          sessionId,
-          personaId,
-          replicaId,
+          sessionId: targetSessionId,
           source,
         }),
       });
@@ -187,7 +131,7 @@ export default function AIConversationInterface({
         throw new Error('Missing conversation URL from server');
       }
       setConversationUrl(data.conversationUrl);
-      persistConversationSession(data.conversationUrl);
+      persistConversationSessionForId(data.conversationUrl, targetSessionId);
     } catch (err) {
       console.error('Error creating conversation:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to start conversation';
@@ -222,26 +166,18 @@ export default function AIConversationInterface({
 
   useEffect(() => {
     return () => {
-      stopPreflightStream();
+      if (storageKey) {
+        clearConversationSession(storageKey);
+      }
     };
-  }, []);
+  }, [storageKey]);
 
   const handleEndConversation = () => {
     console.log('Conversation ended by user');
-    stopPreflightStream();
+    if (storageKey) {
+      clearConversationSession(storageKey);
+    }
     onEnd();
-  };
-
-  const handleResumeConversation = async () => {
-    if (!resumeSession || !resumeSession.conversationUrl) {
-      return;
-    }
-    const sessionLabel = resumeSession.sessionId.slice(0, 8);
-    const hasMediaAccess = await preflightMediaPermissions(sessionLabel);
-    if (!hasMediaAccess) {
-      return;
-    }
-    setLocation(buildConversationPath(resumeSession.sessionId));
   };
 
   const handleStartOver = () => {
@@ -273,10 +209,48 @@ export default function AIConversationInterface({
     );
   }
 
+  const normalizeDailyError = (payload: { message: string; type?: string; code?: string } | string) => {
+    if (typeof payload === 'string') {
+      return { message: payload, type: undefined, code: undefined };
+    }
+    return {
+      message: payload.message || 'Connection error occurred',
+      type: payload.type,
+      code: payload.code,
+    };
+  };
+
+  const isSessionExpiredError = (payload: { message: string; type?: string; code?: string }) => {
+    const message = payload.message.toLowerCase();
+    if (payload.type === 'no-room' || payload.code === 'no-room') {
+      return true;
+    }
+    return (
+      message.includes('meeting has ended')
+      || message.includes('no-room')
+      || message.includes('no room')
+      || message.includes('room was deleted')
+      || message.includes('exiting meeting because room was deleted')
+    );
+  };
+
+  const handleSessionExpired = () => {
+    setSessionExpired(true);
+    setError('This session expired. Please start a new demo.');
+    toast({
+      title: 'Session expired',
+      description: 'This session expired. Please start a new demo.',
+      variant: 'destructive',
+    });
+  };
+
   if (error || !conversationUrl) {
     const showMaxConcurrent = errorCode === 'TAVUS_MAX_CONCURRENT';
+    const showSessionExpired = sessionExpired;
     const displayMessage = showMaxConcurrent
-      ? 'It looks like you already have an active conversation. Resume it or start over.'
+      ? 'It looks like you already have an active conversation. Please start a new demo.'
+      : showSessionExpired
+        ? 'This session expired. Please start a new demo.'
       : (error || 'An error occurred');
 
     return (
@@ -288,17 +262,21 @@ export default function AIConversationInterface({
             <p className="text-sm text-muted-foreground mb-6">{displayMessage}</p>
             {showMaxConcurrent ? (
               <div className="flex flex-col gap-3">
-                {canResume && (
-                  <Button onClick={handleResumeConversation} data-testid="button-resume-conversation">
-                    Resume Conversation
-                  </Button>
-                )}
                 <Button
-                  variant={canResume ? 'outline' : 'default'}
+                  variant="default"
                   onClick={handleStartOver}
                   data-testid="button-start-over"
                 >
-                  Start Over
+                  Start New Demo
+                </Button>
+                <Button variant="ghost" onClick={onEnd} data-testid="button-return">
+                  Return to Home
+                </Button>
+              </div>
+            ) : showSessionExpired ? (
+              <div className="flex flex-col gap-3">
+                <Button onClick={handleStartOver} data-testid="button-start-new-demo">
+                  Start New Demo
                 </Button>
                 <Button variant="ghost" onClick={onEnd} data-testid="button-return">
                   Return to Home
@@ -322,10 +300,16 @@ export default function AIConversationInterface({
         <DailyVideoInterface 
           conversationUrl={conversationUrl}
           onError={(error) => {
-            console.error('Daily video error:', error);
+            const normalized = normalizeDailyError(error);
+            if (isSessionExpiredError(normalized)) {
+              console.warn(`daily.session_expired session=${sessionId.slice(0, 8)} type=${normalized.type || 'unknown'}`);
+              handleSessionExpired();
+              return;
+            }
+            console.error('Daily video error:', normalized.message);
             toast({
               title: 'Connection Error',
-              description: error,
+              description: normalized.message,
               variant: 'destructive',
             });
           }}
