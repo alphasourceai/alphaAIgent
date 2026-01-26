@@ -1,11 +1,20 @@
+import { useState, type FormEvent } from 'react';
 import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useToast } from '@/hooks/use-toast';
+import { apiRequest } from '@/lib/queryClient';
 import { CheckCircle2, ExternalLink, Calendar } from 'lucide-react';
 import Logo from '@/components/Logo';
 
 export default function ThankYou() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const websiteUrl = 'https://www.alphasourceai.com';
   const scheduleUrl = 'https://calendar.google.com/appointments/schedules/AcZssZ2il6qD_fWs-kW8BdxTg_wwTkHk2bMnjCnTTNKWgWqNN0OdE-3Xj2lFKQ8Mu10mY3Ia7jsIpqVs';
 
@@ -23,6 +32,56 @@ export default function ThankYou() {
       return;
     }
     window.location.assign('/');
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isSubmitting) {
+      return;
+    }
+
+    const trimmedName = fullName.trim();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedName) {
+      toast({
+        title: 'Full name required',
+        description: 'Please enter your full name.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+      toast({
+        title: 'Valid email required',
+        description: 'Please enter a valid email address.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await apiRequest('POST', '/api/demo-info-request', {
+        fullName: trimmedName,
+        email: trimmedEmail,
+      });
+      toast({
+        title: "Thanks! We'll be in touch.",
+      });
+      setFullName('');
+      setEmail('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send request.';
+      toast({
+        title: 'Unable to submit request',
+        description: message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -88,9 +147,48 @@ export default function ThankYou() {
               Back to Home
             </Button>
 
-            <p className="text-sm text-muted-foreground pt-2">
-              Explore alphaScreen and schedule a personalized demo on our website
-            </p>
+            <div className="pt-2 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Enter your contact info here for more details.
+              </p>
+              <form
+                className="space-y-4 text-left"
+                onSubmit={handleSubmit}
+                aria-busy={isSubmitting}
+              >
+                <div className="space-y-2">
+                  <Label htmlFor="demo-full-name">Full Name</Label>
+                  <Input
+                    id="demo-full-name"
+                    name="fullName"
+                    placeholder="Full name"
+                    value={fullName}
+                    onChange={(event) => setFullName(event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="demo-email">Email</Label>
+                  <Input
+                    id="demo-email"
+                    name="email"
+                    type="email"
+                    placeholder="you@company.com"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  size="lg"
+                  className="w-full rounded-full min-h-14 text-lg font-bold"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Sending...' : 'Send me more info'}
+                </Button>
+              </form>
+            </div>
           </div>
 
           {/* Social Proof */}

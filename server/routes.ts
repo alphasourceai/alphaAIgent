@@ -21,6 +21,11 @@ const optionalTrimmedString = z.preprocess(
   z.string().optional(),
 );
 
+const requiredTrimmedString = z.preprocess(
+  (value) => (typeof value === "string" ? value.trim() : ""),
+  z.string().min(1),
+);
+
 const appSlugSchema = z.object({
   slug: z.string().trim().min(1).max(64),
 });
@@ -34,6 +39,16 @@ const leadCaptureSchema = z.object({
   ),
   phone: optionalTrimmedString,
   source: optionalTrimmedString,
+});
+
+const demoInfoRequestSchema = z.object({
+  fullName: requiredTrimmedString,
+  email: z.preprocess(
+    (value) => (typeof value === "string" ? value.trim() : ""),
+    z.string().min(1).refine((value) => value.includes("@"), {
+      message: "Invalid email",
+    }),
+  ),
 });
 
 function normalizeSource(source?: string) {
@@ -250,6 +265,55 @@ function withRateLimit(
   return true;
 }
 
+const DEMO_INFO_EMAIL_TO = "info@alphasourceai.com";
+const DEMO_INFO_SUBJECT = "More info request from interactive demo app";
+const DEMO_INFO_SOURCE = "Conference Interactive Demo";
+
+async function sendDemoInfoRequestEmail(params: {
+  fullName: string;
+  email: string;
+}) {
+  const apiKey = String(process.env.SENDGRID_API_KEY || "").trim();
+  if (!apiKey) {
+    const error = new Error("SENDGRID_API_KEY is not configured");
+    (error as Error & { code?: string }).code = "SENDGRID_CONFIG";
+    throw error;
+  }
+  const senderEmail = String(process.env.SENDER_EMAIL || "").trim();
+  if (!senderEmail) {
+    const error = new Error("SENDER_EMAIL is not configured");
+    (error as Error & { code?: string }).code = "SENDGRID_CONFIG";
+    throw error;
+  }
+
+  const body = [
+    `Full Name: ${params.fullName}`,
+    `Email: ${params.email}`,
+    `Timestamp: ${new Date().toISOString()}`,
+    `Source: ${DEMO_INFO_SOURCE}`,
+  ].join("\n");
+
+  const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: DEMO_INFO_EMAIL_TO }] }],
+      from: { email: senderEmail },
+      subject: DEMO_INFO_SUBJECT,
+      content: [{ type: "text/plain", value: body }],
+    }),
+  });
+
+  if (!response.ok) {
+    const error = new Error(`SendGrid request failed with status ${response.status}`);
+    (error as Error & { code?: string }).code = "SENDGRID_ERROR";
+    throw error;
+  }
+}
+
 const createConversationSchema = z.object({
   sessionId: z.string(),
   attendeeName: z.string().optional(),
@@ -337,6 +401,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.status(500).json({ error: "Failed to capture lead" });
+    }
+  });
+
+  app.post("/api/demo-info-request", async (req, res) => {
+    const requestId = req.requestId ?? randomUUID();
+    const ip = req.ip || "unknown";
+    const result = leadLimiter(`${ip}:demo-info-request`);
+    res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+    res.setHeader("X-RateLimit-Reset", String(result.resetAt));
+    if (!result.allowed) {
+      const retryAfterSeconds = Math.ceil(Math.max(result.resetAt - Date.now(), 0) / 1000);
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      return res.status(429).json({
+        error: "Too many requests",
+        code: "RATE_LIMITED",
+        request_id: requestId,
+      });
+    }
+
+    try {
+      const { fullName, email } = demoInfoRequestSchema.parse(req.body);
+      await sendDemoInfoRequestEmail({ fullName, email });
+      res.json({ success: true });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      console.error(`demo-info-request error requestId=${requestId} message=${errorMessage}`);
+
+      if (error instanceof ZodError) {
+        return res.status(400).json({
+          error: "Invalid request data",
+          code: "INVALID_REQUEST",
+          request_id: requestId,
+        });
+      }
+
+      const code = (error as { code?: string }).code === "SENDGRID_CONFIG"
+        ? "SENDGRID_CONFIG"
+        : "SENDGRID_ERROR";
+      const status = code === "SENDGRID_CONFIG" ? 500 : 502;
+      return res.status(status).json({
+        error: code === "SENDGRID_CONFIG"
+          ? "SENDER_EMAIL is not configured"
+          : "Failed to send demo info request",
+        code,
+        request_id: requestId,
+      });
     }
   });
 
